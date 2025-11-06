@@ -670,7 +670,8 @@ class QueryMixin:
 
             # Use utility function to validate image file
             self.logger.debug(f"Calling validate_image_file for: {image_path}")
-            is_valid = validate_image_file(image_path)
+            working_dir = self.lightrag.working_dir if hasattr(self, 'lightrag') and self.lightrag else None
+            is_valid = validate_image_file(image_path, working_dir=working_dir)
             self.logger.debug(f"Validation result for {image_path}: {is_valid}")
 
             if not is_valid:
@@ -680,7 +681,8 @@ class QueryMixin:
             try:
                 # Encode image to base64 using utility function
                 self.logger.debug(f"Attempting to encode image: {image_path}")
-                image_base64 = encode_image_to_base64(image_path)
+                working_dir = self.lightrag.working_dir if hasattr(self, 'lightrag') and self.lightrag else None
+                image_base64 = encode_image_to_base64(image_path, working_dir=working_dir)
                 if image_base64:
                     images_processed += 1
                     # Save base64 and path to instance variables for later use

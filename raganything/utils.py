@@ -56,18 +56,22 @@ def separate_content(
     return text_content, multimodal_items
 
 
-def encode_image_to_base64(image_path: str) -> str:
+def encode_image_to_base64(image_path: str, working_dir: str = None) -> str:
     """
     Encode image file to base64 string
 
     Args:
         image_path: Path to the image file
+        working_dir: Working directory for resolving relative paths
 
     Returns:
         str: Base64 encoded string, empty string if encoding fails
     """
     try:
-        with open(image_path, "rb") as image_file:
+        # Resolve the path first (will be defined below)
+        resolved_path = resolve_image_path(image_path, working_dir) if working_dir else Path(image_path)
+        
+        with open(resolved_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
         return encoded_string
     except Exception as e:
@@ -75,19 +79,89 @@ def encode_image_to_base64(image_path: str) -> str:
         return ""
 
 
-def validate_image_file(image_path: str, max_size_mb: int = 50) -> bool:
+def resolve_image_path(image_path: str, working_dir: str = None) -> Path:
+    """
+    Intelligently resolve image path, supporting multiple directory structures
+    
+    Supports:
+    1. RAGAnything structure: output/{doc}/auto/images/xxx.jpg
+    2. AI-Tutor structure: knowledge_bases/{kb}/images/xxx.jpg
+    3. Absolute paths with incorrect directory structure
+    
+    Args:
+        image_path: Original image path (absolute or relative)
+        working_dir: Working directory (e.g., rag_storage path)
+    
+    Returns:
+        Path: Resolved path if found, original path otherwise
+    """
+    path = Path(image_path)
+    
+    # If absolute path and exists, return directly
+    if path.is_absolute() and path.exists():
+        return path
+    
+    # Try multiple possible base directories
+    possible_paths = [path]  # Original path
+    
+    # Extract just the filename
+    filename = path.name
+    
+    if working_dir:
+        working_path = Path(working_dir)
+        
+        # For AI-Tutor structure: working_dir is kb_dir/rag_storage
+        # Images are in kb_dir/images/
+        # Try: working_dir/../images/filename
+        ai_tutor_path = working_path.parent / "images" / filename
+        possible_paths.append(ai_tutor_path)
+        
+        # For relative paths starting with images/
+        if image_path.startswith("images/"):
+            # Extract just the filename from images/xxx.jpg
+            image_filename = image_path[7:]  # Remove "images/" prefix
+            ai_tutor_path2 = working_path.parent / "images" / image_filename
+            possible_paths.append(ai_tutor_path2)
+        
+        # Also try working_dir/../images/{full_relative_path}
+        possible_paths.append(working_path.parent / image_path)
+        
+        # Try relative to working_dir
+        possible_paths.append(working_path / image_path)
+        
+        # Handle paths with content_list/KB_NAME/auto/images pattern
+        # E.g., /path/to/content_list/P19-1598/auto/images/xxx.jpg
+        # Should resolve to working_dir/../images/xxx.jpg
+        if "content_list" in str(path) and "auto/images" in str(path):
+            logger.debug(f"Detected content_list/auto/images pattern in path: {image_path}")
+            possible_paths.append(working_path.parent / "images" / filename)
+    
+    # Try each possible path
+    for try_path in possible_paths:
+        if try_path.exists():
+            logger.debug(f"Resolved image path: {image_path} -> {try_path}")
+            return try_path
+    
+    # If nothing found, return original
+    logger.debug(f"Could not resolve image path: {image_path}, tried {len(possible_paths)} alternatives")
+    return path
+
+
+def validate_image_file(image_path: str, max_size_mb: int = 50, working_dir: str = None) -> bool:
     """
     Validate if a file is a valid image file
 
     Args:
         image_path: Path to the image file
         max_size_mb: Maximum file size in MB
+        working_dir: Working directory for resolving relative paths
 
     Returns:
         bool: True if valid, False otherwise
     """
     try:
-        path = Path(image_path)
+        # Try to resolve the path intelligently
+        path = resolve_image_path(image_path, working_dir)
 
         logger.debug(f"Validating image path: {image_path}")
         logger.debug(f"Resolved path object: {path}")

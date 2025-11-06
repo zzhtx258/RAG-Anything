@@ -800,7 +800,13 @@ class ImageModalProcessor(BaseModalProcessor):
     def _encode_image_to_base64(self, image_path: str) -> str:
         """Encode image to base64"""
         try:
-            with open(image_path, "rb") as image_file:
+            from raganything.utils import resolve_image_path
+            
+            # Resolve image path with working_dir support
+            working_dir = self.lightrag.working_dir if hasattr(self.lightrag, 'working_dir') else None
+            resolved_path = resolve_image_path(image_path, working_dir)
+            
+            with open(resolved_path, "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
             return encoded_string
         except Exception as e:
