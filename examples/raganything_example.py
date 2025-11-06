@@ -215,13 +215,17 @@ async def process_with_rag(
 
         # 1. Pure text queries using aquery()
         text_queries = [
-            "What is the main content of the document?",
-            "What are the key topics discussed?",
+            "According to table2, how many unique relations are there in the training dataset?"
         ]
 
         for query in text_queries:
             logger.info(f"\n[Text Query]: {query}")
             result = await rag.aquery(query, mode="hybrid")
+            logger.info(f"Answer: {result}")
+        
+        for query in text_queries:
+            logger.info(f"\n[Text Query]: {query}")
+            result = await rag.aquery(query, mode="naive")
             logger.info(f"Answer: {result}")
 
         # 2. Multimodal query with specific multimodal content using aquery_with_multimodal()
@@ -258,6 +262,18 @@ async def process_with_rag(
             mode="hybrid",
         )
         logger.info(f"Answer: {equation_result}")
+
+        # Clean up LLM response cache after all queries
+        logger.info("\nCleaning up LLM response cache...")
+        cache_file = Path(working_dir) / "kv_store_llm_response_cache.json"
+        if cache_file.exists():
+            try:
+                cache_file.unlink()
+                logger.info(f"Deleted cache file: {cache_file}")
+            except Exception as e:
+                logger.warning(f"Failed to delete cache file: {e}")
+        else:
+            logger.info("No cache file found to delete")
 
     except Exception as e:
         logger.error(f"Error processing with RAG: {str(e)}")

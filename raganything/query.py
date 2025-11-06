@@ -97,12 +97,13 @@ class QueryMixin:
 
         return f"multimodal_query:{cache_hash}"
 
-    async def aquery(self, query: str, mode: str = "mix", **kwargs) -> str:
+    async def aquery(self, query: str, mode: str = "mix", _skip_multimodal_append: bool = False, **kwargs) -> str:
         """
         Pure text query - directly calls LightRAG's query functionality
 
         Args:
             query: Query text
+            _skip_multimodal_append: Internal parameter to skip appending multimodal references
             mode: Query mode ("local", "global", "hybrid", "naive", "mix", "bypass")
             **kwargs: Other query parameters, will be passed to QueryParam
                 - vlm_enhanced: bool, default True when vision_model_func is available.
@@ -133,7 +134,7 @@ class QueryMixin:
             and hasattr(self, "vision_model_func")
             and self.vision_model_func
         ):
-            return await self.aquery_vlm_enhanced(query, mode=mode, **kwargs)
+            return await self.aquery_vlm_enhanced(query, mode=mode, _skip_multimodal_append=_skip_multimodal_append, **kwargs)
         elif vlm_enhanced and (
             not hasattr(self, "vision_model_func") or not self.vision_model_func
         ):
@@ -149,6 +150,11 @@ class QueryMixin:
 
         # Call LightRAG's query method
         result = await self.lightrag.aquery(query, param=query_param)
+        
+        # Append multimodal reference marker (will show "No multimodal content used")
+        # unless this is an internal call from aquery_with_multimodal
+        if not _skip_multimodal_append:
+            result = self._append_multimodal_references(result, None)
 
         self.logger.info("Text query completed")
         return result
@@ -205,6 +211,7 @@ class QueryMixin:
         # If no multimodal content, fallback to pure text query
         if not multimodal_content:
             self.logger.info("No multimodal content provided, executing text query")
+            # Note: we still append "No multimodal content used" here since this is a direct user call
             return await self.aquery(query, mode=mode, **kwargs)
 
         # Generate cache key for multimodal query
@@ -233,7 +240,11 @@ class QueryMixin:
                             self.logger.info(
                                 f"Multimodal query cache hit: {cache_key[:16]}..."
                             )
-                            return result_content
+                            # Append multimodal references even for cached results
+                            result_with_references = self._append_multimodal_references(
+                                result_content, multimodal_content
+                            )
+                            return result_with_references
                 except Exception as e:
                     self.logger.debug(f"Error accessing multimodal query cache: {e}")
 
@@ -246,8 +257,8 @@ class QueryMixin:
             f"Generated enhanced query length: {len(enhanced_query)} characters"
         )
 
-        # Execute enhanced query
-        result = await self.aquery(enhanced_query, mode=mode, **kwargs)
+        # Execute enhanced query (skip internal multimodal append since we'll append at the end)
+        result = await self.aquery(enhanced_query, mode=mode, _skip_multimodal_append=True, **kwargs)
 
         # Save to cache if available and enabled
         if (
@@ -290,15 +301,19 @@ class QueryMixin:
             except Exception as e:
                 self.logger.debug(f"Error persisting multimodal query cache: {e}")
 
+        # Append multimodal content references to the result
+        result = self._append_multimodal_references(result, multimodal_content)
+
         self.logger.info("Multimodal query completed")
         return result
 
-    async def aquery_vlm_enhanced(self, query: str, mode: str = "mix", **kwargs) -> str:
+    async def aquery_vlm_enhanced(self, query: str, mode: str = "mix", _skip_multimodal_append: bool = False, **kwargs) -> str:
         """
         VLM enhanced query - replaces image paths in retrieved context with base64 encoded images for VLM processing
 
         Args:
             query: User query
+            _skip_multimodal_append: Internal parameter to skip appending multimodal references
             mode: Underlying LightRAG query mode
             **kwargs: Other query parameters
 
@@ -336,7 +351,13 @@ class QueryMixin:
             self.logger.info("No valid images found, falling back to normal query")
             # Fallback to normal query
             query_param = QueryParam(mode=mode, **kwargs)
-            return await self.lightrag.aquery(query, param=query_param)
+            result = await self.lightrag.aquery(query, param=query_param)
+            
+            # Append multimodal reference marker (unless skipped by caller)
+            if not _skip_multimodal_append:
+                result = self._append_multimodal_references(result, None)
+            
+            return result
 
         self.logger.info(f"Processed {images_found} images for VLM")
 
@@ -345,6 +366,21 @@ class QueryMixin:
 
         # 4. Call VLM for question answering
         result = await self._call_vlm_with_multimodal_content(messages)
+
+        # Append multimodal reference marker (VLM uses images from retrieval context)
+        # Create multimodal content list from the images used in VLM processing
+        if not _skip_multimodal_append:
+            vlm_images_content = None
+            if hasattr(self, '_current_image_paths') and self._current_image_paths:
+                vlm_images_content = [
+                    {
+                        "type": "image",
+                        "image_path": img_path,
+                        "image_caption": f"Retrieved image used by VLM"
+                    }
+                    for img_path in self._current_image_paths
+                ]
+            result = self._append_multimodal_references(result, vlm_images_content)
 
         self.logger.info("VLM enhanced query completed")
         return result
@@ -516,6 +552,84 @@ class QueryMixin:
 
         return description
 
+    def _append_multimodal_references(
+        self, result: str, multimodal_content: List[Dict[str, Any]]
+    ) -> str:
+        """
+        Append multimodal content references to query result
+
+        Args:
+            result: Original query result
+            multimodal_content: List of multimodal content
+
+        Returns:
+            str: Result with appended multimodal references
+        """
+        if not multimodal_content:
+            # Add "No multimodal content used" marker when no multimodal content
+            return result + "\n\n---\n**Referenced Multimodal Content:** No multimodal content used"
+
+        references = ["\n\n---\n**Referenced Multimodal Content:**\n"]
+
+        for i, content in enumerate(multimodal_content, 1):
+            content_type = content.get("type", "unknown")
+
+            try:
+                if content_type == "image":
+                    # For images, append path and captions
+                    img_path = content.get("img_path") or content.get("image_path", "")
+                    captions = content.get("image_caption", content.get("img_caption", []))
+                    footnotes = content.get("image_footnote", content.get("img_footnote", []))
+
+                    references.append(f"\n{i}. **Image**")
+                    if img_path:
+                        references.append(f"   - Path: `{img_path}`")
+                    if captions:
+                        caption_text = ", ".join(captions) if isinstance(captions, list) else captions
+                        references.append(f"   - Caption: {caption_text}")
+                    if footnotes:
+                        footnote_text = ", ".join(footnotes) if isinstance(footnotes, list) else footnotes
+                        references.append(f"   - Footnote: {footnote_text}")
+
+                elif content_type == "table":
+                    # For tables, append table data
+                    table_data = content.get("table_data", "")
+                    table_caption = content.get("table_caption", "")
+
+                    references.append(f"\n{i}. **Table**")
+                    if table_caption:
+                        references.append(f"   - Caption: {table_caption}")
+                    if table_data:
+                        references.append(f"   - Content:\n```\n{table_data}\n```")
+
+                elif content_type == "equation":
+                    # For equations, append LaTeX code
+                    latex = content.get("equation_latex") or content.get("latex", "")
+                    equation_caption = content.get("equation_caption", "")
+
+                    references.append(f"\n{i}. **Equation**")
+                    if equation_caption:
+                        references.append(f"   - Caption: {equation_caption}")
+                    if latex:
+                        references.append(f"   - LaTeX: `{latex}`")
+
+                else:
+                    # For other types, append basic description
+                    references.append(f"\n{i}. **{content_type}**")
+                    # Get all keys except 'type'
+                    content_info = {k: v for k, v in content.items() if k != "type"}
+                    if content_info:
+                        for key, value in content_info.items():
+                            if isinstance(value, str) and len(value) > 200:
+                                value = value[:200] + "..."
+                            references.append(f"   - {key}: {value}")
+
+            except Exception as e:
+                self.logger.warning(f"Error formatting multimodal reference {i}: {e}")
+                references.append(f"\n{i}. **{content_type}** (formatting failed)")
+
+        return result + "".join(references)
+
     async def _process_image_paths_for_vlm(self, prompt: str) -> tuple[str, int]:
         """
         Process image paths in prompt, keeping original paths and adding VLM markers
@@ -531,6 +645,7 @@ class QueryMixin:
 
         # Initialize image cache
         self._current_images_base64 = []
+        self._current_image_paths = []  # Track image paths for multimodal references
 
         # Enhanced regex pattern for matching image paths
         # Matches only the path ending with image file extensions
@@ -568,8 +683,9 @@ class QueryMixin:
                 image_base64 = encode_image_to_base64(image_path)
                 if image_base64:
                     images_processed += 1
-                    # Save base64 to instance variable for later use
+                    # Save base64 and path to instance variables for later use
                     self._current_images_base64.append(image_base64)
+                    self._current_image_paths.append(image_path)
 
                     # Keep original path info and add VLM marker
                     result = f"Image Path: {image_path}\n[VLM_IMAGE_{images_processed}]"
