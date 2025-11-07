@@ -336,6 +336,20 @@ class QueryMixin:
         if hasattr(self, "_current_images_base64"):
             delattr(self, "_current_images_base64")
 
+        # Check if only context is needed
+        only_need_context = kwargs.get("only_need_context", False)
+        
+        if only_need_context:
+            # If only context is needed, get it directly without VLM processing
+            query_param = QueryParam(mode=mode, only_need_context=True, **kwargs)
+            result = await self.lightrag.aquery(query, param=query_param)
+            
+            # Append multimodal reference marker (unless skipped by caller)
+            if not _skip_multimodal_append:
+                result = self._append_multimodal_references(result, None)
+            
+            return result
+
         # 1. Get original retrieval prompt (without generating final answer)
         query_param = QueryParam(mode=mode, only_need_prompt=True, **kwargs)
         raw_prompt = await self.lightrag.aquery(query, param=query_param)
