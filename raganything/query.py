@@ -685,14 +685,18 @@ class QueryMixin:
                 image_base64 = encode_image_to_base64(image_path, working_dir=working_dir)
                 if image_base64:
                     images_processed += 1
-                    # Save base64 and path to instance variables for later use
+                    # Resolve the correct path for display
+                    from raganything.utils import resolve_image_path
+                    resolved_path = resolve_image_path(image_path, working_dir)
+                    
+                    # Save base64 and RESOLVED path to instance variables for later use
                     self._current_images_base64.append(image_base64)
-                    self._current_image_paths.append(image_path)
+                    self._current_image_paths.append(str(resolved_path))
 
                     # Keep original path info and add VLM marker
                     result = f"Image Path: {image_path}\n[VLM_IMAGE_{images_processed}]"
                     self.logger.debug(
-                        f"Successfully processed image {images_processed}: {image_path}"
+                        f"Successfully processed image {images_processed}: {image_path} -> {resolved_path}"
                     )
                     return result
                 else:
