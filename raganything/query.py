@@ -341,7 +341,7 @@ class QueryMixin:
         
         if only_need_context:
             # If only context is needed, get it directly without VLM processing
-            query_param = QueryParam(mode=mode, only_need_context=True, **kwargs)
+            query_param = QueryParam(mode=mode, **kwargs)
             result = await self.lightrag.aquery(query, param=query_param)
             
             # Append multimodal reference marker (unless skipped by caller)
