@@ -344,9 +344,10 @@ class QueryMixin:
             query_param = QueryParam(mode=mode, **kwargs)
             result = await self.lightrag.aquery(query, param=query_param)
             
-            # Append multimodal reference marker (unless skipped by caller)
+            # Extract multimodal content from the context
             if not _skip_multimodal_append:
-                result = self._append_multimodal_references(result, None)
+                multimodal_content = self._extract_multimodal_from_context(result)
+                result = self._append_multimodal_references(result, multimodal_content)
             
             return result
 
@@ -565,6 +566,51 @@ class QueryMixin:
         )
 
         return description
+
+    def _extract_multimodal_from_context(self, context: str) -> List[Dict[str, Any]]:
+        """
+        Extract multimodal content from context returned by only_need_context
+        
+        Args:
+            context: Context string from LightRAG
+            
+        Returns:
+            List of multimodal content dictionaries
+        """
+        import re
+        from raganything.utils import resolve_image_path
+        multimodal_content = []
+        
+        # Get working directory for path resolution
+        working_dir = self.lightrag.working_dir if hasattr(self, 'lightrag') and self.lightrag else None
+        
+        # Extract images - look for "Image Path:" patterns
+        image_pattern = r'Image Path:\s*([^\n]+)'
+        image_matches = re.findall(image_pattern, context)
+        for img_path in image_matches:
+            img_path = img_path.strip()
+            if img_path:
+                # Resolve to correct path
+                resolved_path = resolve_image_path(img_path, working_dir)
+                multimodal_content.append({
+                    "type": "image",
+                    "image_path": str(resolved_path),
+                    "image_caption": "From retrieved context"
+                })
+        
+        # Extract equations - look for "Equation:" followed by $$ ... $$
+        equation_pattern = r'Equation:\s*\$\$(.*?)\$\$'
+        equation_matches = re.findall(equation_pattern, context, re.DOTALL)
+        for equation in equation_matches:
+            equation = equation.strip()
+            if equation:
+                multimodal_content.append({
+                    "type": "equation",
+                    "latex": equation,
+                    "equation_caption": "From retrieved context"
+                })
+        
+        return multimodal_content
 
     def _append_multimodal_references(
         self, result: str, multimodal_content: List[Dict[str, Any]]
