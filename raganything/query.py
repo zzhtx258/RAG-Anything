@@ -585,18 +585,23 @@ class QueryMixin:
         working_dir = self.lightrag.working_dir if hasattr(self, 'lightrag') and self.lightrag else None
         
         # Extract images - look for "Image Path:" patterns
-        image_pattern = r'Image Path:\s*([^\n]+)'
+        # Match only up to the first actual newline or next keyword (Caption, Captions, Footnote, etc.)
+        image_pattern = r'Image Path:\s*([^\n\\]+?)(?:\s*\\n|$|\n|(?=\s+Caption))'
         image_matches = re.findall(image_pattern, context)
         for img_path in image_matches:
             img_path = img_path.strip()
-            if img_path:
-                # Resolve to correct path
-                resolved_path = resolve_image_path(img_path, working_dir)
-                multimodal_content.append({
-                    "type": "image",
-                    "image_path": str(resolved_path),
-                    "image_caption": "From retrieved context"
-                })
+            if img_path and not img_path.startswith('{'):  # Avoid matching JSON
+                try:
+                    # Resolve to correct path
+                    resolved_path = resolve_image_path(img_path, working_dir)
+                    multimodal_content.append({
+                        "type": "image",
+                        "image_path": str(resolved_path),
+                        "image_caption": "From retrieved context"
+                    })
+                except Exception as e:
+                    self.logger.warning(f"Failed to resolve image path {img_path}: {e}")
+                    continue
         
         # Extract equations - look for "Equation:" followed by $$ ... $$
         equation_pattern = r'Equation:\s*\$\$(.*?)\$\$'
